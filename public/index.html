@@ -72,9 +72,67 @@ contract Vault {
 </section>
 
 <section>
+  <h2>Pricing</h2>
+  <div style="display:grid;gap:14px;grid-template-columns:1fr 1fr 1fr">
+    <div style="background:var(--card);border:1px solid var(--border);border-radius:8px;padding:16px">
+      <h3 style="font-size:16px">Free</h3>
+      <div style="font-size:24px;font-weight:700;margin:6px 0">$0</div>
+      <ul style="list-style:none;font-size:13px;color:var(--muted)">
+        <li style="padding:2px 0">→ Top programs feed (this page)</li>
+        <li style="padding:2px 0">→ On-demand analysis (web demo)</li>
+        <li style="padding:2px 0">→ Public API</li>
+      </ul>
+    </div>
+    <div style="background:var(--card);border:1px solid var(--accent);border-radius:8px;padding:16px;position:relative">
+      <h3 style="font-size:16px">Pro</h3>
+      <div style="font-size:24px;font-weight:700;margin:6px 0">$49 <small style="font-size:13px;color:var(--muted)">/ mo</small></div>
+      <ul style="list-style:none;font-size:13px;color:var(--muted)">
+        <li style="padding:2px 0">→ Unlimited contract analysis</li>
+        <li style="padding:2px 0">→ Full program intel + payout history</li>
+        <li style="padding:2px 0">→ New-program alerts</li>
+        <li style="padding:2px 0">→ API: 5000/day</li>
+      </ul>
+      <button onclick="upgrade('pro')" style="margin-top:12px;width:100%">Upgrade — pay with USDC</button>
+    </div>
+    <div style="background:var(--card);border:1px solid var(--border);border-radius:8px;padding:16px">
+      <h3 style="font-size:16px">Team</h3>
+      <div style="font-size:24px;font-weight:700;margin:6px 0">$199 <small style="font-size:13px;color:var(--muted)">/ mo</small></div>
+      <ul style="list-style:none;font-size:13px;color:var(--muted)">
+        <li style="padding:2px 0">→ Everything in Pro</li>
+        <li style="padding:2px 0">→ Bulk repo analysis</li>
+        <li style="padding:2px 0">→ Custom program watch-lists</li>
+        <li style="padding:2px 0">→ API: 50000/day</li>
+      </ul>
+      <button onclick="upgrade('team')" style="margin-top:12px;width:100%">Upgrade — pay with USDC</button>
+    </div>
+  </div>
+</section>
+
+<section id="checkout" style="display:none">
+  <h2 id="checkout-title">Upgrade</h2>
+  <p style="color:var(--muted);font-size:13px" id="checkout-sub">Pay once with USDC on Base. You'll get an address and a unique memo — send, then paste your transaction hash to unlock instantly. No card, no account.</p>
+  <p style="font-size:13px;margin-top:8px" id="co-msg"></p>
+  <div id="co-quote" style="display:none;margin-top:14px">
+    <div style="background:#0a0c10;border:1px solid var(--border);border-radius:8px;padding:14px;font-size:13px">
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid var(--border);gap:8px;flex-wrap:wrap"><span style="color:var(--muted);min-width:120px">Amount</span><span style="font-family:ui-monospace,monospace;font-size:12px;word-break:break-all" id="q-amount"></span></div>
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid var(--border);gap:8px;flex-wrap:wrap"><span style="color:var(--muted);min-width:120px">Asset / chain</span><span style="font-family:ui-monospace,monospace;font-size:12px;word-break:break-all" id="q-asset"></span></div>
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid var(--border);gap:8px;flex-wrap:wrap"><span style="color:var(--muted);min-width:120px">Send to</span><span style="font-family:ui-monospace,monospace;font-size:12px;word-break:break-all" id="q-address"></span><button onclick="copyAddr()" id="q-copy" style="font-size:11px;padding:4px 8px;margin-top:0">copy</button></div>
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;gap:8px;flex-wrap:wrap"><span style="color:var(--muted);min-width:120px">Memo (quote id)</span><span style="font-family:ui-monospace,monospace;font-size:12px;word-break:break-all" id="q-quote"></span></div>
+    </div>
+    <p style="color:var(--muted);font-size:13px;margin-top:8px" id="q-instructions"></p>
+    <div style="display:flex;gap:8px;margin-top:10px">
+      <input id="co-tx" type="text" placeholder="0x… transaction hash" style="flex:1;background:#0a0c10;border:1px solid var(--border);color:var(--fg);padding:10px;border-radius:6px;font-size:14px;font-family:inherit">
+      <button onclick="confirmTx()" id="co-confirm-btn" style="margin-top:0">I've sent it — unlock</button>
+    </div>
+  </div>
+</section>
+
+<section>
   <h2>API</h2>
   <p><code>GET /api/programs</code> — full program list as JSON</p>
   <p><code>POST /api/analyze</code> — body: <code>{code, program_id?, repo_url?}</code> → finding classes</p>
+  <p><code>POST /api/subscribe</code> — body: <code>{tier}</code> → USDC payment quote (402)</p>
+  <p><code>POST /api/confirm</code> — body: <code>{quote_id, tx_hash}</code> → unlock</p>
   <p><code>GET /api/status</code> — system health</p>
 </section>
 
@@ -153,6 +211,81 @@ async function analyze() {
     r.innerHTML = html;
   } catch (e) {
     r.textContent = 'Network: ' + e.message;
+  }
+}
+
+let CO = { tier: null, quote_id: null, address: null, confirm_url: '/api/confirm' };
+
+function upgrade(tier) {
+  CO.tier = tier;
+  CO.quote_id = null; CO.address = null; CO.confirm_url = '/api/confirm';
+  const price = tier === 'team' ? '199' : '49';
+  const label = tier.charAt(0).toUpperCase() + tier.slice(1);
+  document.getElementById('checkout-title').textContent = `Upgrade to ${label} — $${price}/mo`;
+  const sec = document.getElementById('checkout');
+  sec.style.display = '';
+  document.getElementById('co-quote').style.display = 'none';
+  const msg = document.getElementById('co-msg');
+  msg.style.color = 'var(--muted)'; msg.textContent = '';
+  sec.scrollIntoView({ behavior: 'smooth' });
+  startCheckout();
+}
+
+async function startCheckout() {
+  const msg = document.getElementById('co-msg');
+  msg.style.color = 'var(--muted)'; msg.textContent = 'getting quote…';
+  try {
+    const r = await fetch('/api/subscribe', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tier: CO.tier })
+    });
+    const d = await r.json();
+    if (r.status === 402 && d.pay_to) {
+      CO.quote_id = d.quote_id; CO.address = d.pay_to.address; CO.confirm_url = d.confirm_url || '/api/confirm';
+      document.getElementById('q-amount').textContent = `${d.pay_to.amount} ${d.pay_to.asset}`;
+      document.getElementById('q-asset').textContent = `${d.pay_to.asset} on ${d.pay_to.chain}`;
+      document.getElementById('q-address').textContent = d.pay_to.address;
+      document.getElementById('q-quote').textContent = d.quote_id;
+      document.getElementById('q-instructions').textContent = d.instructions || '';
+      document.getElementById('co-quote').style.display = '';
+      msg.style.color = 'var(--muted)'; msg.textContent = 'Send the exact amount, then paste your transaction hash below.';
+    } else if (r.ok) {
+      msg.style.color = 'var(--low)'; msg.textContent = d.message || 'subscribed';
+    } else {
+      msg.style.color = 'var(--high)'; msg.textContent = d.error || 'could not start checkout';
+    }
+  } catch (e) {
+    msg.style.color = 'var(--high)'; msg.textContent = 'network error — try again';
+  }
+}
+
+async function copyAddr() {
+  try {
+    await navigator.clipboard.writeText(CO.address || '');
+    const b = document.getElementById('q-copy'); b.textContent = 'copied';
+    setTimeout(() => { b.textContent = 'copy'; }, 1500);
+  } catch (e) {}
+}
+
+async function confirmTx() {
+  const btn = document.getElementById('co-confirm-btn');
+  const tx = document.getElementById('co-tx').value.trim();
+  const msg = document.getElementById('co-msg');
+  if (!/^0x[0-9a-fA-F]{6,}$/.test(tx)) { msg.style.color = 'var(--high)'; msg.textContent = 'paste a valid 0x… transaction hash'; return; }
+  if (!CO.quote_id) { msg.style.color = 'var(--high)'; msg.textContent = 'get a payment quote first'; return; }
+  btn.disabled = true; btn.textContent = 'verifying…';
+  try {
+    const r = await fetch(CO.confirm_url, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ quote_id: CO.quote_id, tx_hash: tx })
+    });
+    const d = await r.json();
+    if (r.ok) { msg.style.color = 'var(--low)'; msg.textContent = `✓ ${CO.tier} unlocked — receipt recorded. We'll follow up with your access details.`; }
+    else { msg.style.color = 'var(--high)'; msg.textContent = d.error || 'payment not verified yet — on-chain confirmation can take a moment, try again shortly'; }
+  } catch (e) {
+    msg.style.color = 'var(--high)'; msg.textContent = 'network error — try again';
+  } finally {
+    btn.disabled = false; btn.textContent = "I've sent it — unlock";
   }
 }
 

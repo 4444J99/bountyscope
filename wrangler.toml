@@ -24,6 +24,12 @@ id = "4d5c933f26494a32a1a19850628179d8"
 
 [vars]
 USER_AGENT = "BountyScope research bot"
+PAYRAIL_URL = "https://payrail.ivixivi.workers.dev"
+
+# Shared fleet money rail (service binding — internal worker→worker call).
+[[services]]
+binding = "PAYRAIL"
+service = "payrail"
 
 [observability]
 enabled = true
