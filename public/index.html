@@ -47,6 +47,36 @@ a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}
   <p class="tag">Bug bounty intel for DeFi. Find high-EV targets. Analyze in seconds.</p>
 </header>
 
+<section id="account-section" style="background:var(--card);border:1px solid var(--border);border-radius:8px;padding:16px;">
+  <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px">
+    <div>
+      <h2 style="margin:0;font-size:18px">Account Access</h2>
+      <div id="account-status" style="font-size:13px;color:var(--muted);margin-top:4px">Checking access…</div>
+    </div>
+    <div style="display:flex;gap:8px;align-items:center">
+      <input id="api-key" type="password" placeholder="bsk_… paste API key" style="width:220px;background:#0a0c10;border:1px solid var(--border);color:var(--fg);padding:9px 12px;border-radius:6px;font-size:13px;font-family:ui-monospace,monospace">
+      <button onclick="saveKey()" id="save-key-btn" style="margin:0">Save key</button>
+      <button onclick="logout()" id="logout-btn" style="margin:0;display:none;background:#15191f;color:var(--fg);border:1px solid var(--border)">Sign out</button>
+    </div>
+  </div>
+  <div id="account-details" style="display:none;margin-top:16px;border-top:1px solid var(--border);padding-top:16px">
+    <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(150px, 1fr));gap:16px">
+      <div>
+        <div style="font-size:11px;text-transform:uppercase;color:var(--muted);letter-spacing:0.05em">Tier</div>
+        <div id="acc-tier" style="font-weight:700;margin-top:4px;text-transform:uppercase;color:var(--accent)"></div>
+      </div>
+      <div>
+        <div style="font-size:11px;text-transform:uppercase;color:var(--muted);letter-spacing:0.05em">Analyzer Quota</div>
+        <div id="acc-quota" style="font-weight:700;margin-top:4px"></div>
+      </div>
+      <div>
+        <div style="font-size:11px;text-transform:uppercase;color:var(--muted);letter-spacing:0.05em">Intel Feed</div>
+        <div id="acc-feed" style="font-weight:700;margin-top:4px"></div>
+      </div>
+    </div>
+  </div>
+</section>
+
 <section>
   <h2>Top programs by max payout</h2>
   <div id="programs">loading…</div>
@@ -55,12 +85,8 @@ a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}
 
 <section>
   <h2>Intel feed — recent program/repo changes</h2>
-  <p style="color:var(--muted);font-size:14px">When an in-scope program or repo changes, defenders want to know first. <strong>Free</strong> sees this feed delayed 24h and capped. <strong>Pro/Team</strong> unlock it real-time, uncapped, with in-scope repo detail.</p>
-  <div style="display:flex;gap:8px;margin:10px 0;flex-wrap:wrap">
-    <input id="api-key" type="text" placeholder="bsk_… paste your API key for the real-time feed" style="flex:1;min-width:220px;background:#0a0c10;border:1px solid var(--border);color:var(--fg);padding:9px 12px;border-radius:6px;font-size:13px;font-family:ui-monospace,monospace">
-    <button onclick="saveKey()" style="margin-top:0">Save key</button>
-    <button onclick="loadChanges()" style="margin-top:0;background:#15191f;color:var(--fg);border:1px solid var(--border)">Refresh</button>
-  </div>
+  <p style="color:var(--muted);font-size:14px;margin-bottom:12px">When an in-scope program or repo changes, defenders want to know first. <strong>Free</strong> sees this feed delayed 24h and capped. <strong>Pro/Team</strong> unlock it real-time, uncapped, with in-scope repo detail.</p>
+  <button onclick="loadChanges()" style="margin-top:0;margin-bottom:10px;background:#15191f;color:var(--fg);border:1px solid var(--border)">Refresh feed</button>
   <div id="changes">loading…</div>
 </section>
 
@@ -207,9 +233,63 @@ function setKey(k) { try { k ? localStorage.setItem('bs_api_key', k) : localStor
 function authHeaders(base) { const h = base || {}; const k = getKey(); if (k) h['Authorization'] = 'Bearer ' + k; return h; }
 
 function saveKey() {
-  const k = document.getElementById('api-key').value.trim();
-  setKey(k);
+  const inp = document.getElementById('api-key');
+  if(inp) setKey(inp.value.trim());
+  loadAccount();
   loadChanges();
+}
+
+function logout() {
+  setKey('');
+  loadAccount();
+  loadChanges();
+}
+
+async function loadAccount() {
+  const k = getKey();
+  const inp = document.getElementById('api-key');
+  const saveBtn = document.getElementById('save-key-btn');
+  const logoutBtn = document.getElementById('logout-btn');
+  const details = document.getElementById('account-details');
+  const status = document.getElementById('account-status');
+  
+  if (inp && k) inp.value = k;
+  
+  if (!k) {
+    status.textContent = 'Free tier (unauthenticated) — enter key to unlock Pro/Team';
+    details.style.display = 'none';
+    logoutBtn.style.display = 'none';
+    if(inp) inp.style.display = '';
+    if(saveBtn) saveBtn.style.display = '';
+    return;
+  }
+  
+  status.textContent = 'Loading account details…';
+  try {
+    const r = await fetch('/api/whoami', { headers: authHeaders() });
+    const d = await r.json();
+    if (d.authenticated) {
+      status.textContent = 'Authenticated';
+      details.style.display = '';
+      logoutBtn.style.display = '';
+      if(inp) inp.style.display = 'none';
+      if(saveBtn) saveBtn.style.display = 'none';
+      document.getElementById('acc-tier').textContent = d.tier;
+      const limit = d.analyze_limit === null ? 'Unlimited' : d.analyze_limit;
+      document.getElementById('acc-quota').textContent = `${d.analyze_used_today} / ${limit} used`;
+      document.getElementById('acc-feed').textContent = d.changes_real_time ? 'Real-time' : 'Delayed';
+      if (d.tier === 'team') document.getElementById('acc-tier').style.color = 'var(--high)';
+      else if (d.tier === 'pro') document.getElementById('acc-tier').style.color = 'var(--accent)';
+    } else {
+      status.textContent = 'Invalid or expired key — falling back to Free tier';
+      details.style.display = 'none';
+      logoutBtn.style.display = 'none';
+      if(inp) inp.style.display = '';
+      if(saveBtn) saveBtn.style.display = '';
+    }
+  } catch(e) {
+    status.textContent = 'Error loading account status';
+  }
 }
 
 async function loadChanges() {
@@ -342,6 +422,7 @@ async function confirmTx() {
         setKey(d.api_key);
         const inp = document.getElementById('api-key');
         if (inp) inp.value = d.api_key;
+        loadAccount();
         loadChanges();
         msg.style.color = 'var(--low)';
         msg.innerHTML = `✓ ${escapeHtml(CO.tier)} unlocked. Your API key (saved to this browser, shown once):<br>` +
@@ -360,11 +441,7 @@ async function confirmTx() {
   }
 }
 
-(function initKey() {
-  const k = getKey();
-  const inp = document.getElementById('api-key');
-  if (k && inp) inp.value = k;
-})();
+loadAccount();
 loadPrograms();
 loadChanges();
 </script>
