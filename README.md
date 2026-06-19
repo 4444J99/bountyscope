@@ -15,20 +15,30 @@ Attacker-side complement to [VulnPulse](https://vulnpulse.ivixivi.workers.dev) (
 
 ```
 GET  /api/programs          — Tracked Immunefi programs (severity caps, in-scope repos)
-POST /api/analyze           — Analyze a Solidity snippet for known vuln patterns
-GET  /api/changes           — Recent program/repo changes (HEAD diffs)
+GET  /api/changes           — Intel feed: recent program/repo changes (HEAD diffs). GATED.
+POST /api/analyze           — Analyze a Solidity snippet for known vuln patterns. Free: 5/day.
+GET  /api/whoami            — Tier + remaining quota for the presented API key
+POST /api/subscribe         — { tier } → USDC payment quote (402)
+POST /api/confirm           — { quote_id, tx_hash } → mints your API key
 GET  /api/status            — System health
 ```
 
+Gated endpoints read an API key from `Authorization: Bearer bsk_…` or `x-api-key`.
+No key → the **free** tier (limited + delayed).
+
 ## Pricing
 
-| Tier  | Price    | What's included                                          |
-|-------|----------|----------------------------------------------------------|
-| Free  | $0       | Public program list + 5 analyzer calls/day              |
-| Pro   | $49/mo   | Unlimited analyzer calls + change alerts + priority NVD |
-| Team  | $199/mo  | Custom watchlist + Slack/Discord webhooks + SLA         |
+Defender-side intel: the feed is gated so paying teams get changes in real time.
+Full detail in **[PRICING.md](./PRICING.md)**.
 
-**Pay any rail:** GitHub Sponsors, crypto, BMC, latent Stripe.
+| Tier  | Price    | Intel feed (`/api/changes`)              | Analyzer        |
+|-------|----------|------------------------------------------|-----------------|
+| Free  | $0       | Delayed 24h, capped at 5, no repo detail | 5 calls/day     |
+| Pro   | $49/mo   | Real-time, ≤200 events, repo detail      | Unlimited       |
+| Team  | $199/mo  | Real-time, ≤1000 events, repo detail     | Unlimited       |
+
+**Pay any rail:** GitHub Sponsors, crypto, BMC, latent Stripe. Subscribe → pay USDC
+→ confirm returns a `bsk_…` API key.
 
 ## Stack
 

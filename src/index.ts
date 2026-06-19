@@ -46,6 +46,91 @@ interface Program {
 const PROGRAMS_KEY = 'programs:list';
 const REPORT_PREFIX = 'report:';
 
+// === Tiers & access gate ===
+// The intel feed is defender-side: protocol teams want to know the instant an
+// in-scope program/repo changes so they can react before hunters do. Free tier
+// gets a deliberately limited + delayed view; paid tiers (unlocked by an API key
+// minted at /api/confirm) get the real-time, uncapped feed with repo detail.
+type Tier = 'free' | 'pro' | 'team';
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+interface TierPolicy {
+  changes_max: number;       // max change events returned
+  changes_delay_ms: number;  // hide events newer than this (0 = real-time)
+  repo_detail: boolean;      // include in_scope_repos in change events
+  analyze_per_day: number;   // /api/analyze quota (Infinity = effectively unlimited)
+}
+
+const TIER_POLICY: Record<Tier, TierPolicy> = {
+  free: { changes_max: 5,    changes_delay_ms: DAY_MS, repo_detail: false, analyze_per_day: 5 },
+  pro:  { changes_max: 200,  changes_delay_ms: 0,      repo_detail: true,  analyze_per_day: Infinity },
+  team: { changes_max: 1000, changes_delay_ms: 0,      repo_detail: true,  analyze_per_day: Infinity },
+};
+
+const API_KEY_PREFIX = 'key:';
+const SUB_PREFIX = 'sub:';
+
+interface ApiKeyRecord { tier: Tier; quote_id: string; issued_at: string; }
+
+// API keys are bearer secrets: `bsk_` + 48 hex chars (24 random bytes).
+function genApiKey(): string {
+  const bytes = crypto.getRandomValues(new Uint8Array(24));
+  return 'bsk_' + [...bytes].map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+function normalizeTier(t: unknown): Tier {
+  return t === 'team' ? 'team' : t === 'pro' ? 'pro' : 'free';
+}
+
+// Accept the key from either `Authorization: Bearer <key>` or `x-api-key`.
+function extractApiKey(req: Request): string | null {
+  const auth = req.headers.get('authorization');
+  if (auth) {
+    const m = /^Bearer\s+(\S+)/i.exec(auth);
+    if (m) return m[1];
+  }
+  const x = req.headers.get('x-api-key');
+  return x && x.trim() ? x.trim() : null;
+}
+
+// Resolve the caller's tier. No key (or an unknown/revoked key) → free.
+async function resolveAccess(req: Request, env: Env): Promise<{ tier: Tier; key: string | null; record: ApiKeyRecord | null }> {
+  const key = extractApiKey(req);
+  if (!key) return { tier: 'free', key: null, record: null };
+  const raw = await env.BS_REPORTS.get(`${API_KEY_PREFIX}${key}`);
+  if (!raw) return { tier: 'free', key, record: null };
+  try {
+    const rec = JSON.parse(raw) as ApiKeyRecord;
+    return { tier: normalizeTier(rec.tier), key, record: rec };
+  } catch {
+    return { tier: 'free', key, record: null };
+  }
+}
+
+// Per-day analyzer quota. Keyed by API key when present, else by client IP so the
+// free tier can't be trivially reset. 48h TTL covers timezone slop around midnight.
+function quotaIdent(req: Request, key: string | null): string {
+  return key ?? `ip:${req.headers.get('cf-connecting-ip') ?? 'unknown'}`;
+}
+
+async function readQuota(env: Env, req: Request, key: string | null): Promise<number> {
+  const day = new Date().toISOString().slice(0, 10);
+  const raw = await env.BS_REPORTS.get(`quota:${day}:${quotaIdent(req, key)}`);
+  return parseInt(raw ?? '0', 10) || 0;
+}
+
+async function bumpQuota(env: Env, req: Request, tier: Tier, key: string | null): Promise<{ ok: boolean; used: number; limit: number }> {
+  const limit = TIER_POLICY[tier].analyze_per_day;
+  if (!Number.isFinite(limit)) return { ok: true, used: 0, limit };
+  const day = new Date().toISOString().slice(0, 10);
+  const qkey = `quota:${day}:${quotaIdent(req, key)}`;
+  const cur = parseInt((await env.BS_REPORTS.get(qkey)) ?? '0', 10) || 0;
+  if (cur >= limit) return { ok: false, used: cur, limit };
+  await env.BS_REPORTS.put(qkey, String(cur + 1), { expirationTtl: 60 * 60 * 48 });
+  return { ok: true, used: cur + 1, limit };
+}
+
 // === payrail (shared fleet money rail) ===
 // bountyscope plugs into the live payrail Worker instead of re-implementing
 // "wallet unset / no checkout". payrail returns where to send money + a memo
@@ -134,6 +219,36 @@ async function ensureSeeded(env: Env): Promise<Program[]> {
   return list;
 }
 
+// === Change feed (the gated intel stream) ===
+// The cron appends a ChangeEvent every time a program's HEAD diff fires, so the
+// feed is a real rolling log rather than a snapshot of current program state.
+const CHANGE_LOG_KEY = 'changes:log';
+const CHANGE_LOG_CAP = 200;
+
+interface ChangeEvent {
+  program_id: string;
+  name: string;
+  url: string;
+  source: Source;
+  max_bounty_usd?: number;
+  in_scope_repos?: string[];
+  changed_at: string;
+}
+
+async function loadChangeLog(env: Env): Promise<ChangeEvent[]> {
+  const raw = await env.BS_PROGRAMS.get(CHANGE_LOG_KEY);
+  if (!raw) return [];
+  try { return JSON.parse(raw) as ChangeEvent[]; } catch { return []; }
+}
+
+// Prepend newest events, keep the log capped (newest first).
+async function appendChangeLog(env: Env, events: ChangeEvent[]) {
+  if (events.length === 0) return;
+  const existing = await loadChangeLog(env);
+  const merged = [...events, ...existing].slice(0, CHANGE_LOG_CAP);
+  await env.BS_PROGRAMS.put(CHANGE_LOG_KEY, JSON.stringify(merged));
+}
+
 async function checkProgramChanges(env: Env, p: Program): Promise<boolean> {
   // HEAD request to program URL. If Last-Modified or ETag changed, mark.
   // (For programs that don't expose those headers, fall back to body hash.)
@@ -157,16 +272,20 @@ async function checkProgramChanges(env: Env, p: Program): Promise<boolean> {
 async function runCron(env: Env) {
   const programs = await ensureSeeded(env);
   const now = new Date().toISOString();
-  let changed = 0;
+  const events: ChangeEvent[] = [];
   for (const p of programs) {
     p.last_seen_at = now;
     if (await checkProgramChanges(env, p)) {
       p.last_changed_at = now;
-      changed++;
+      events.push({
+        program_id: p.id, name: p.name, url: p.url, source: p.source,
+        max_bounty_usd: p.max_bounty_usd, in_scope_repos: p.in_scope_repos, changed_at: now,
+      });
     }
   }
   await savePrograms(env, programs);
-  console.log(`bountyscope: cron run, ${programs.length} programs, ${changed} changed`);
+  await appendChangeLog(env, events);
+  console.log(`bountyscope: cron run, ${programs.length} programs, ${events.length} changed`);
 }
 
 // === Analysis ===
@@ -215,6 +334,20 @@ async function handleAnalyze(req: Request, env: Env): Promise<Response> {
   const repo_url = body?.repo_url ? String(body.repo_url) : undefined;
   if (!codeOrDescription) return Response.json({ error: 'missing code or description' }, { status: 400 });
   if (codeOrDescription.length > 60_000) return Response.json({ error: 'too long; chunk smaller (<60k chars)' }, { status: 400 });
+
+  // Tiered quota: free callers get TIER_POLICY.free.analyze_per_day; paid keys are uncapped.
+  const { tier, key } = await resolveAccess(req, env);
+  const quota = await bumpQuota(env, req, tier, key);
+  if (!quota.ok) {
+    return Response.json({
+      error: 'quota_exceeded',
+      tier,
+      used: quota.used,
+      limit: quota.limit,
+      message: `Free tier is limited to ${quota.limit} analyzer calls/day. Upgrade for unlimited: POST /api/subscribe.`,
+      subscribe_url: '/api/subscribe',
+    }, { status: 402 });
+  }
 
   let aiResp: any;
   try {
@@ -270,6 +403,61 @@ async function handleStatus(_req: Request, env: Env): Promise<Response> {
   });
 }
 
+// The gated intel feed. Free callers get a delayed (24h), capped, repo-detail-
+// stripped view; a valid Pro/Team API key unlocks the real-time, uncapped feed.
+async function handleChanges(req: Request, env: Env): Promise<Response> {
+  await ensureSeeded(env);
+  const { tier } = await resolveAccess(req, env);
+  const policy = TIER_POLICY[tier];
+  const log = await loadChangeLog(env);
+  const nowMs = Date.now();
+
+  // Delay gate: free tier only sees events older than the delay window.
+  const visible = log.filter(e => {
+    const t = Date.parse(e.changed_at);
+    return !Number.isNaN(t) && nowMs - t >= policy.changes_delay_ms;
+  });
+  const sliced = visible.slice(0, policy.changes_max);
+  const changes = sliced.map(e => policy.repo_detail ? e : {
+    program_id: e.program_id, name: e.name, url: e.url,
+    source: e.source, max_bounty_usd: e.max_bounty_usd, changed_at: e.changed_at,
+  });
+
+  const body: Record<string, unknown> = {
+    tier,
+    real_time: policy.changes_delay_ms === 0,
+    delay_hours: policy.changes_delay_ms / (60 * 60 * 1000),
+    count: changes.length,
+    total_visible: visible.length,
+    changes,
+  };
+  if (tier === 'free') {
+    body.hidden_by_delay = log.length - visible.length; // recent events withheld
+    body.capped = visible.length > changes.length;
+    body.note = 'Free feed is delayed 24h, capped at 5 events, and omits in-scope repo detail. ' +
+                'Pro/Team unlock the real-time, uncapped feed with repo detail. ' +
+                'Subscribe: POST /api/subscribe → pay → POST /api/confirm returns an API key. ' +
+                'Send the key as `Authorization: Bearer <key>` or `x-api-key: <key>`.';
+  }
+  return Response.json(body);
+}
+
+// Inspect the tier/quota tied to a presented API key (or the anonymous free tier).
+async function handleWhoami(req: Request, env: Env): Promise<Response> {
+  const { tier, key, record } = await resolveAccess(req, env);
+  const policy = TIER_POLICY[tier];
+  const used = await readQuota(env, req, key);
+  return Response.json({
+    tier,
+    authenticated: !!record,
+    key_present: !!key,
+    analyze_used_today: used,
+    analyze_limit: Number.isFinite(policy.analyze_per_day) ? policy.analyze_per_day : null,
+    changes_real_time: policy.changes_delay_ms === 0,
+    issued_at: record?.issued_at ?? null,
+  });
+}
+
 // === Subscriptions (payrail-gated paid tiers) ===
 
 // Paid subscription. Reads { tier } (default 'pro'); maps pro=49, team=199; gets a
@@ -313,6 +501,19 @@ async function handleConfirm(req: Request, env: Env): Promise<Response> {
   if (!body?.quote_id || !body?.tx_hash) {
     return Response.json({ error: 'quote_id and tx_hash required' }, { status: 400 });
   }
+  // Idempotency: if this quote was already confirmed, return the existing key
+  // instead of 404-ing (the pending record is deleted on first confirm). This
+  // also lets a buyer who lost the key re-fetch it by re-submitting.
+  const existingSubRaw = await env.BS_REPORTS.get(`${SUB_PREFIX}${body.quote_id}`);
+  if (existingSubRaw) {
+    const sub = JSON.parse(existingSubRaw) as { tier: Tier; api_key?: string };
+    return Response.json({
+      ok: true, tier: sub.tier, api_key: sub.api_key ?? null,
+      already_active: true,
+      usage: 'Send this key as `Authorization: Bearer <key>` or `x-api-key: <key>`.',
+    }, { status: 200 });
+  }
+
   const pendingRaw = await env.BS_REPORTS.get(`pending:${body.quote_id}`);
   if (!pendingRaw) return Response.json({ error: 'quote_not_found_or_expired' }, { status: 404 });
   const pending = JSON.parse(pendingRaw) as { tier: 'pro' | 'team'; quote_id: string; created_at: string };
@@ -339,12 +540,25 @@ async function handleConfirm(req: Request, env: Env): Promise<Response> {
   }
   const receiptResp = await rr.json().catch(() => ({})) as { ok?: boolean; receipt?: unknown };
 
+  // Mint the API key that unlocks the paid tier on the gated endpoints.
+  const activatedAt = new Date().toISOString();
+  const apiKey = genApiKey();
   await env.BS_REPORTS.put(
-    `sub:${body.quote_id}`,
-    JSON.stringify({ tier, quote_id: body.quote_id, activated_at: new Date().toISOString() }),
+    `${API_KEY_PREFIX}${apiKey}`,
+    JSON.stringify({ tier, quote_id: body.quote_id, issued_at: activatedAt } satisfies ApiKeyRecord),
+  );
+  await env.BS_REPORTS.put(
+    `${SUB_PREFIX}${body.quote_id}`,
+    JSON.stringify({ tier, quote_id: body.quote_id, api_key: apiKey, activated_at: activatedAt }),
   );
   await env.BS_REPORTS.delete(`pending:${body.quote_id}`);
-  return Response.json({ ok: true, tier, receipt: receiptResp.receipt }, { status: 201 });
+  return Response.json({
+    ok: true,
+    tier,
+    api_key: apiKey,
+    usage: 'Send this key as `Authorization: Bearer <key>` or `x-api-key: <key>` to /api/changes and /api/analyze. Store it now — it is shown once.',
+    receipt: receiptResp.receipt,
+  }, { status: 201 });
 }
 
 // Poll payment status by proxying payrail's public receipt lookup.
@@ -362,8 +576,10 @@ export default {
   async fetch(req: Request, env: Env): Promise<Response> {
     const url = new URL(req.url);
     if (url.pathname === '/api/programs') return handlePrograms(req, env);
+    if (url.pathname === '/api/changes') return handleChanges(req, env);
     if (url.pathname === '/api/analyze') return handleAnalyze(req, env);
     if (url.pathname === '/api/status') return handleStatus(req, env);
+    if (url.pathname === '/api/whoami') return handleWhoami(req, env);
     if (url.pathname === '/api/subscribe') return handleSubscribe(req, env);
     if (url.pathname === '/api/confirm') return handleConfirm(req, env);
     if (url.pathname === '/api/pay-status') return handlePayStatus(req, env);
