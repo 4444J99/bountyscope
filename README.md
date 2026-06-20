@@ -20,11 +20,15 @@ POST /api/analyze           — Analyze a Solidity snippet for known vuln patter
 GET  /api/whoami            — Tier + remaining quota for the presented API key
 POST /api/subscribe         — { tier } → USDC payment quote (402)
 POST /api/confirm           — { quote_id, tx_hash } → mints your API key
+GET  /api/pay-status        — Poll payment receipt status by quote_id
 GET  /api/status            — System health
 ```
 
 Gated endpoints read an API key from `Authorization: Bearer bsk_…` or `x-api-key`.
 No key → the **free** tier (limited + delayed).
+
+Customer integration docs with cURL examples, response shapes, auth details, and
+error handling: **[docs/API.md](./docs/API.md)**.
 
 ## Pricing
 
