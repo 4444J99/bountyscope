@@ -24,6 +24,9 @@ interface Env {
   PAYRAIL?: Fetcher;
   PAYRAIL_URL?: string;
   SHIP_HMAC_SECRET?: string;
+  STRIPE_SECRET_KEY?: string;
+  STRIPE_PRICE_PRO?: string;
+  STRIPE_PRICE_TEAM?: string;
 }
 
 type Source = 'immunefi' | 'code4rena' | 'sherlock' | 'cantina' | 'curated';
@@ -131,58 +134,11 @@ async function bumpQuota(env: Env, req: Request, tier: Tier, key: string | null)
   return { ok: true, used: cur + 1, limit };
 }
 
-// === payrail (shared fleet money rail) ===
-// bountyscope plugs into the live payrail Worker instead of re-implementing
-// "wallet unset / no checkout". payrail returns where to send money + a memo
-// (quote_id); the buyer pays on-chain, then /api/confirm records the receipt.
-const PAYRAIL_DEFAULT = 'https://payrail.ivixivi.workers.dev';
-const TIER_PRICE: Record<'pro' | 'team', string> = { pro: '49', team: '199' };
+// === Stripe Checkout ===
+// Bountyscope uses Stripe Checkout for subscriptions.
+// /api/subscribe returns a checkout URL.
+// /api/confirm validates the session and mints the API key.
 
-interface PayrailQuote {
-  quote_id: string;
-  pay_to: { rail: string; chain: string; asset: string; address: string; amount: string } | null;
-  checkout: string | null;
-  instructions: string;
-  expires_in_seconds: number;
-}
-
-// Single egress point to payrail. Prefers the service binding (an internal
-// worker→worker call that never touches the public edge → immune to both the
-// *.workers.dev same-zone restriction and edge bot-management). Falls back to the
-// public hostname with a browser UA so even the fallback clears bot filters. When
-// the binding is used the host in the URL is ignored — only path/query/method/body.
-function payrailFetch(env: Env, path: string, init?: RequestInit): Promise<Response> {
-  if (env.PAYRAIL) return env.PAYRAIL.fetch(new Request(`https://payrail${path}`, init));
-  const base = env.PAYRAIL_URL ?? PAYRAIL_DEFAULT;
-  const headers = new Headers(init?.headers);
-  if (!headers.has('user-agent')) {
-    headers.set('user-agent', 'Mozilla/5.0 (compatible; bountyscope/1.0; +https://bountyscope.ivixivi.workers.dev)');
-  }
-  return fetch(base + path, { ...init, headers });
-}
-
-async function payrailQuote(env: Env, tier: 'pro' | 'team'): Promise<PayrailQuote> {
-  const qs = new URLSearchParams({
-    ship: 'bountyscope',
-    sku: `bountyscope:${tier}`,
-    amount: TIER_PRICE[tier],
-    currency: 'USDC',
-  });
-  const r = await payrailFetch(env, `/pay?${qs.toString()}`);
-  if (!r.ok) throw new Error(`payrail /pay ${r.status}`);
-  return r.json();
-}
-
-// HMAC-SHA256 hex, byte-identical to payrail's hmac() so timingSafeEqual passes.
-// Only used when SHIP_HMAC_SECRET is set (payrail has none today → optional).
-async function hmacHex(secret: string, message: string): Promise<string> {
-  const key = await crypto.subtle.importKey(
-    'raw', new TextEncoder().encode(secret),
-    { name: 'HMAC', hash: 'SHA-256' }, false, ['sign'],
-  );
-  const sig = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(message));
-  return [...new Uint8Array(sig)].map(b => b.toString(16).padStart(2, '0')).join('');
-}
 
 // Curated starter set — well-known active programs. Cron will update.
 // (External-source scraping is added incrementally; this guarantees a populated UI on day 1.)
@@ -458,53 +414,68 @@ async function handleWhoami(req: Request, env: Env): Promise<Response> {
   });
 }
 
-// === Subscriptions (payrail-gated paid tiers) ===
+// === Subscriptions (Stripe Checkout) ===
 
-// Paid subscription. Reads { tier } (default 'pro'); maps pro=49, team=199; gets a
-// live quote from the shared payrail rail and returns a 402 carrying the on-chain
-// address + memo (quote_id). The buyer pays, then POSTs the tx hash to /api/confirm
-// to unlock. Pending state persists in BS_REPORTS (7-day TTL). No "wired-but-unset" 503.
+// Paid subscription. Reads { tier } (default 'pro'), gets a checkout session from Stripe,
+// and returns the checkout URL.
 async function handleSubscribe(req: Request, env: Env): Promise<Response> {
   if (req.method !== 'POST') return new Response('POST only', { status: 405 });
   const body = await req.json().catch(() => null) as { tier?: string } | null;
   const tier: 'pro' | 'team' = body?.tier === 'team' ? 'team' : 'pro';
 
-  let q: PayrailQuote;
-  try {
-    q = await payrailQuote(env, tier);
-  } catch (err) {
-    return Response.json({ error: 'rail_unavailable', detail: String(err) }, { status: 502 });
+  if (!env.STRIPE_SECRET_KEY) {
+    return Response.json({ error: 'Stripe is not configured on the backend.' }, { status: 500 });
   }
-  await env.BS_REPORTS.put(
-    `pending:${q.quote_id}`,
-    JSON.stringify({ tier, quote_id: q.quote_id, created_at: new Date().toISOString() }),
-    { expirationTtl: 60 * 60 * 24 * 7 },
-  );
+
+  const priceId = tier === 'team' ? (env.STRIPE_PRICE_TEAM || 'price_team') : (env.STRIPE_PRICE_PRO || 'price_pro');
+  const origin = new URL(req.url).origin;
+
+  const params = new URLSearchParams({
+    'success_url': `${origin}/?session_id={CHECKOUT_SESSION_ID}`,
+    'cancel_url': `${origin}/`,
+    'line_items[0][price]': priceId,
+    'line_items[0][quantity]': '1',
+    'mode': 'subscription',
+    'client_reference_id': tier
+  });
+
+  const r = await fetch('https://api.stripe.com/v1/checkout/sessions', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${env.STRIPE_SECRET_KEY}`,
+      'Content-Type': 'application/x-www-form-urlencoded'
+    },
+    body: params
+  });
+
+  if (!r.ok) {
+    const err = await r.text();
+    return Response.json({ error: 'stripe_error', detail: err }, { status: 502 });
+  }
+  const session = await r.json() as any;
+
   return Response.json({
     status: 'payment_required',
     tier,
-    quote_id: q.quote_id,
-    pay_to: q.pay_to,
-    checkout: q.checkout,
-    instructions: q.instructions,
-    expires_in_seconds: q.expires_in_seconds,
-    confirm_url: '/api/confirm',
-  }, { status: 402 });
+    checkout_url: session.url,
+  });
 }
 
-// A buyer who paid posts { quote_id, tx_hash }. We forward it to payrail
-// /receipt — the receipt's payer_ref == tx_hash is the TIER-1 artifact — then
-// flip the pending sub to active and unlock the paid tier.
+// A buyer who paid returns to the app. The frontend calls this with the session_id.
+// We verify the session status with Stripe, then mint the API key.
 async function handleConfirm(req: Request, env: Env): Promise<Response> {
   if (req.method !== 'POST') return new Response('POST only', { status: 405 });
-  const body = await req.json().catch(() => null) as { quote_id?: string; tx_hash?: string } | null;
-  if (!body?.quote_id || !body?.tx_hash) {
-    return Response.json({ error: 'quote_id and tx_hash required' }, { status: 400 });
+  const body = await req.json().catch(() => null) as { session_id?: string } | null;
+  if (!body?.session_id) {
+    return Response.json({ error: 'session_id required' }, { status: 400 });
   }
-  // Idempotency: if this quote was already confirmed, return the existing key
-  // instead of 404-ing (the pending record is deleted on first confirm). This
-  // also lets a buyer who lost the key re-fetch it by re-submitting.
-  const existingSubRaw = await env.BS_REPORTS.get(`${SUB_PREFIX}${body.quote_id}`);
+
+  if (!env.STRIPE_SECRET_KEY) {
+    return Response.json({ error: 'Stripe is not configured' }, { status: 500 });
+  }
+
+  // Idempotency: if this session was already confirmed, return the existing key
+  const existingSubRaw = await env.BS_REPORTS.get(`${SUB_PREFIX}${body.session_id}`);
   if (existingSubRaw) {
     const sub = JSON.parse(existingSubRaw) as { tier: Tier; api_key?: string };
     return Response.json({
@@ -514,62 +485,39 @@ async function handleConfirm(req: Request, env: Env): Promise<Response> {
     }, { status: 200 });
   }
 
-  const pendingRaw = await env.BS_REPORTS.get(`pending:${body.quote_id}`);
-  if (!pendingRaw) return Response.json({ error: 'quote_not_found_or_expired' }, { status: 404 });
-  const pending = JSON.parse(pendingRaw) as { tier: 'pro' | 'team'; quote_id: string; created_at: string };
-  const tier = (pending.tier === 'team' ? 'team' : 'pro') as 'pro' | 'team';
-
-  const payload = JSON.stringify({
-    quote_id: body.quote_id,
-    ship: 'bountyscope',
-    sku: `bountyscope:${tier}`,
-    amount: TIER_PRICE[tier],
-    currency: 'USDC',
-    rail: 'crypto',
-    tx_hash: body.tx_hash,
+  const r = await fetch(`https://api.stripe.com/v1/checkout/sessions/${body.session_id}`, {
+    headers: { 'Authorization': `Bearer ${env.STRIPE_SECRET_KEY}` }
   });
-  const headers: Record<string, string> = { 'content-type': 'application/json' };
-  if (env.SHIP_HMAC_SECRET) headers['x-payrail-signature'] = await hmacHex(env.SHIP_HMAC_SECRET, payload);
 
-  const rr = await payrailFetch(env, '/receipt', { method: 'POST', headers, body: payload });
-  if (!rr.ok) {
-    return Response.json(
-      { error: 'receipt_rejected', status: rr.status, detail: await rr.text().catch(() => '') },
-      { status: 502 },
-    );
+  if (!r.ok) {
+    return Response.json({ error: 'stripe_error' }, { status: 502 });
   }
-  const receiptResp = await rr.json().catch(() => ({})) as { ok?: boolean; receipt?: unknown };
+  const session = await r.json() as any;
+
+  if (session.payment_status !== 'paid') {
+    return Response.json({ error: 'payment_not_completed' }, { status: 402 });
+  }
+
+  const tier = (session.client_reference_id === 'team' ? 'team' : 'pro') as 'pro' | 'team';
 
   // Mint the API key that unlocks the paid tier on the gated endpoints.
   const activatedAt = new Date().toISOString();
   const apiKey = genApiKey();
   await env.BS_REPORTS.put(
     `${API_KEY_PREFIX}${apiKey}`,
-    JSON.stringify({ tier, quote_id: body.quote_id, issued_at: activatedAt } satisfies ApiKeyRecord),
+    JSON.stringify({ tier, quote_id: body.session_id, issued_at: activatedAt } satisfies ApiKeyRecord),
   );
   await env.BS_REPORTS.put(
-    `${SUB_PREFIX}${body.quote_id}`,
-    JSON.stringify({ tier, quote_id: body.quote_id, api_key: apiKey, activated_at: activatedAt }),
+    `${SUB_PREFIX}${body.session_id}`,
+    JSON.stringify({ tier, quote_id: body.session_id, api_key: apiKey, activated_at: activatedAt }),
   );
-  await env.BS_REPORTS.delete(`pending:${body.quote_id}`);
+  
   return Response.json({
     ok: true,
     tier,
     api_key: apiKey,
     usage: 'Send this key as `Authorization: Bearer <key>` or `x-api-key: <key>` to /api/changes and /api/analyze. Store it now — it is shown once.',
-    receipt: receiptResp.receipt,
   }, { status: 201 });
-}
-
-// Poll payment status by proxying payrail's public receipt lookup.
-async function handlePayStatus(req: Request, env: Env): Promise<Response> {
-  const url = new URL(req.url);
-  const quoteId = url.searchParams.get('quote_id');
-  if (!quoteId) return Response.json({ error: 'quote_id required' }, { status: 400 });
-  const r = await payrailFetch(env, `/receipt/${encodeURIComponent(quoteId)}`);
-  if (r.status === 404) return Response.json({ paid: false, quote_id: quoteId });
-  if (!r.ok) return Response.json({ error: 'status_unavailable', status: r.status }, { status: 502 });
-  return Response.json({ paid: true, receipt: await r.json() });
 }
 
 export default {
@@ -582,7 +530,6 @@ export default {
     if (url.pathname === '/api/whoami') return handleWhoami(req, env);
     if (url.pathname === '/api/subscribe') return handleSubscribe(req, env);
     if (url.pathname === '/api/confirm') return handleConfirm(req, env);
-    if (url.pathname === '/api/pay-status') return handlePayStatus(req, env);
     return env.ASSETS.fetch(req);
   },
 

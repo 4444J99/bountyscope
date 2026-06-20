@@ -47,6 +47,36 @@ a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}
   <p class="tag">Bug bounty intel for DeFi. Find high-EV targets. Analyze in seconds.</p>
 </header>
 
+<section id="account-section" style="background:var(--card);border:1px solid var(--border);border-radius:8px;padding:16px;">
+  <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px">
+    <div>
+      <h2 style="margin:0;font-size:18px">Account Access</h2>
+      <div id="account-status" style="font-size:13px;color:var(--muted);margin-top:4px">Checking access…</div>
+    </div>
+    <div style="display:flex;gap:8px;align-items:center">
+      <input id="api-key" type="password" placeholder="bsk_… paste API key" style="width:220px;background:#0a0c10;border:1px solid var(--border);color:var(--fg);padding:9px 12px;border-radius:6px;font-size:13px;font-family:ui-monospace,monospace">
+      <button onclick="saveKey()" id="save-key-btn" style="margin:0">Save key</button>
+      <button onclick="logout()" id="logout-btn" style="margin:0;display:none;background:#15191f;color:var(--fg);border:1px solid var(--border)">Sign out</button>
+    </div>
+  </div>
+  <div id="account-details" style="display:none;margin-top:16px;border-top:1px solid var(--border);padding-top:16px">
+    <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(150px, 1fr));gap:16px">
+      <div>
+        <div style="font-size:11px;text-transform:uppercase;color:var(--muted);letter-spacing:0.05em">Tier</div>
+        <div id="acc-tier" style="font-weight:700;margin-top:4px;text-transform:uppercase;color:var(--accent)"></div>
+      </div>
+      <div>
+        <div style="font-size:11px;text-transform:uppercase;color:var(--muted);letter-spacing:0.05em">Analyzer Quota</div>
+        <div id="acc-quota" style="font-weight:700;margin-top:4px"></div>
+      </div>
+      <div>
+        <div style="font-size:11px;text-transform:uppercase;color:var(--muted);letter-spacing:0.05em">Intel Feed</div>
+        <div id="acc-feed" style="font-weight:700;margin-top:4px"></div>
+      </div>
+    </div>
+  </div>
+</section>
+
 <section>
   <h2>Top programs by max payout</h2>
   <div id="programs">loading…</div>
@@ -55,12 +85,8 @@ a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}
 
 <section>
   <h2>Intel feed — recent program/repo changes</h2>
-  <p style="color:var(--muted);font-size:14px">When an in-scope program or repo changes, defenders want to know first. <strong>Free</strong> sees this feed delayed 24h and capped. <strong>Pro/Team</strong> unlock it real-time, uncapped, with in-scope repo detail.</p>
-  <div style="display:flex;gap:8px;margin:10px 0;flex-wrap:wrap">
-    <input id="api-key" type="text" placeholder="bsk_… paste your API key for the real-time feed" style="flex:1;min-width:220px;background:#0a0c10;border:1px solid var(--border);color:var(--fg);padding:9px 12px;border-radius:6px;font-size:13px;font-family:ui-monospace,monospace">
-    <button onclick="saveKey()" style="margin-top:0">Save key</button>
-    <button onclick="loadChanges()" style="margin-top:0;background:#15191f;color:var(--fg);border:1px solid var(--border)">Refresh</button>
-  </div>
+  <p style="color:var(--muted);font-size:14px;margin-bottom:12px">When an in-scope program or repo changes, defenders want to know first. <strong>Free</strong> sees this feed delayed 24h and capped. <strong>Pro/Team</strong> unlock it real-time, uncapped, with in-scope repo detail.</p>
+  <button onclick="loadChanges()" style="margin-top:0;margin-bottom:10px;background:#15191f;color:var(--fg);border:1px solid var(--border)">Refresh feed</button>
   <div id="changes">loading…</div>
 </section>
 
@@ -103,7 +129,7 @@ contract Vault {
         <li style="padding:2px 0">→ Unlimited contract analysis</li>
         <li style="padding:2px 0">→ API key access</li>
       </ul>
-      <button onclick="upgrade('pro')" style="margin-top:12px;width:100%">Upgrade — pay with USDC</button>
+      <button onclick="upgrade('pro')" style="margin-top:12px;width:100%">Upgrade — Stripe Checkout</button>
     </div>
     <div style="background:var(--card);border:1px solid var(--border);border-radius:8px;padding:16px">
       <h3 style="font-size:16px">Team</h3>
@@ -114,29 +140,12 @@ contract Vault {
         <li style="padding:2px 0">→ Custom program watch-lists</li>
         <li style="padding:2px 0">→ SLA + priority support</li>
       </ul>
-      <button onclick="upgrade('team')" style="margin-top:12px;width:100%">Upgrade — pay with USDC</button>
+      <button onclick="upgrade('team')" style="margin-top:12px;width:100%">Upgrade — Stripe Checkout</button>
     </div>
   </div>
 </section>
 
-<section id="checkout" style="display:none">
-  <h2 id="checkout-title">Upgrade</h2>
-  <p style="color:var(--muted);font-size:13px" id="checkout-sub">Pay once with USDC on Base. You'll get an address and a unique memo — send, then paste your transaction hash to unlock instantly. No card, no account.</p>
-  <p style="font-size:13px;margin-top:8px" id="co-msg"></p>
-  <div id="co-quote" style="display:none;margin-top:14px">
-    <div style="background:#0a0c10;border:1px solid var(--border);border-radius:8px;padding:14px;font-size:13px">
-      <div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid var(--border);gap:8px;flex-wrap:wrap"><span style="color:var(--muted);min-width:120px">Amount</span><span style="font-family:ui-monospace,monospace;font-size:12px;word-break:break-all" id="q-amount"></span></div>
-      <div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid var(--border);gap:8px;flex-wrap:wrap"><span style="color:var(--muted);min-width:120px">Asset / chain</span><span style="font-family:ui-monospace,monospace;font-size:12px;word-break:break-all" id="q-asset"></span></div>
-      <div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid var(--border);gap:8px;flex-wrap:wrap"><span style="color:var(--muted);min-width:120px">Send to</span><span style="font-family:ui-monospace,monospace;font-size:12px;word-break:break-all" id="q-address"></span><button onclick="copyAddr()" id="q-copy" style="font-size:11px;padding:4px 8px;margin-top:0">copy</button></div>
-      <div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;gap:8px;flex-wrap:wrap"><span style="color:var(--muted);min-width:120px">Memo (quote id)</span><span style="font-family:ui-monospace,monospace;font-size:12px;word-break:break-all" id="q-quote"></span></div>
-    </div>
-    <p style="color:var(--muted);font-size:13px;margin-top:8px" id="q-instructions"></p>
-    <div style="display:flex;gap:8px;margin-top:10px">
-      <input id="co-tx" type="text" placeholder="0x… transaction hash" style="flex:1;background:#0a0c10;border:1px solid var(--border);color:var(--fg);padding:10px;border-radius:6px;font-size:14px;font-family:inherit">
-      <button onclick="confirmTx()" id="co-confirm-btn" style="margin-top:0">I've sent it — unlock</button>
-    </div>
-  </div>
-</section>
+
 
 <section>
   <h2>API</h2>
@@ -144,8 +153,8 @@ contract Vault {
   <p><code>GET /api/changes</code> — intel feed; free = delayed 24h + capped, Pro/Team = real-time. Auth: <code>Authorization: Bearer bsk_…</code> or <code>x-api-key: bsk_…</code></p>
   <p><code>POST /api/analyze</code> — body: <code>{code, program_id?, repo_url?}</code> → finding classes (free: 5/day per IP)</p>
   <p><code>GET /api/whoami</code> — tier + quota for the presented key</p>
-  <p><code>POST /api/subscribe</code> — body: <code>{tier}</code> → USDC payment quote (402)</p>
-  <p><code>POST /api/confirm</code> — body: <code>{quote_id, tx_hash}</code> → returns your <code>api_key</code></p>
+  <p><code>POST /api/subscribe</code> — body: <code>{tier}</code> → Stripe checkout URL (402)</p>
+  <p><code>POST /api/confirm</code> — body: <code>{session_id}</code> → returns your <code>api_key</code></p>
   <p><code>GET /api/status</code> — system health</p>
 </section>
 
@@ -207,9 +216,63 @@ function setKey(k) { try { k ? localStorage.setItem('bs_api_key', k) : localStor
 function authHeaders(base) { const h = base || {}; const k = getKey(); if (k) h['Authorization'] = 'Bearer ' + k; return h; }
 
 function saveKey() {
-  const k = document.getElementById('api-key').value.trim();
-  setKey(k);
+  const inp = document.getElementById('api-key');
+  if(inp) setKey(inp.value.trim());
+  loadAccount();
   loadChanges();
+}
+
+function logout() {
+  setKey('');
+  loadAccount();
+  loadChanges();
+}
+
+async function loadAccount() {
+  const k = getKey();
+  const inp = document.getElementById('api-key');
+  const saveBtn = document.getElementById('save-key-btn');
+  const logoutBtn = document.getElementById('logout-btn');
+  const details = document.getElementById('account-details');
+  const status = document.getElementById('account-status');
+  
+  if (inp && k) inp.value = k;
+  
+  if (!k) {
+    status.textContent = 'Free tier (unauthenticated) — enter key to unlock Pro/Team';
+    details.style.display = 'none';
+    logoutBtn.style.display = 'none';
+    if(inp) inp.style.display = '';
+    if(saveBtn) saveBtn.style.display = '';
+    return;
+  }
+  
+  status.textContent = 'Loading account details…';
+  try {
+    const r = await fetch('/api/whoami', { headers: authHeaders() });
+    const d = await r.json();
+    if (d.authenticated) {
+      status.textContent = 'Authenticated';
+      details.style.display = '';
+      logoutBtn.style.display = '';
+      if(inp) inp.style.display = 'none';
+      if(saveBtn) saveBtn.style.display = 'none';
+      document.getElementById('acc-tier').textContent = d.tier;
+      const limit = d.analyze_limit === null ? 'Unlimited' : d.analyze_limit;
+      document.getElementById('acc-quota').textContent = `${d.analyze_used_today} / ${limit} used`;
+      document.getElementById('acc-feed').textContent = d.changes_real_time ? 'Real-time' : 'Delayed';
+      if (d.tier === 'team') document.getElementById('acc-tier').style.color = 'var(--high)';
+      else if (d.tier === 'pro') document.getElementById('acc-tier').style.color = 'var(--accent)';
+    } else {
+      status.textContent = 'Invalid or expired key — falling back to Free tier';
+      details.style.display = 'none';
+      logoutBtn.style.display = 'none';
+      if(inp) inp.style.display = '';
+      if(saveBtn) saveBtn.style.display = '';
+    }
+  } catch(e) {
+    status.textContent = 'Error loading account status';
+  }
 }
 
 async function loadChanges() {
@@ -271,102 +334,60 @@ async function analyze() {
   }
 }
 
-let CO = { tier: null, quote_id: null, address: null, confirm_url: '/api/confirm' };
-
-function upgrade(tier) {
-  CO.tier = tier;
-  CO.quote_id = null; CO.address = null; CO.confirm_url = '/api/confirm';
+async function upgrade(tier) {
   const price = tier === 'team' ? '199' : '49';
   const label = tier.charAt(0).toUpperCase() + tier.slice(1);
-  document.getElementById('checkout-title').textContent = `Upgrade to ${label} — $${price}/mo`;
-  const sec = document.getElementById('checkout');
-  sec.style.display = '';
-  document.getElementById('co-quote').style.display = 'none';
-  const msg = document.getElementById('co-msg');
-  msg.style.color = 'var(--muted)'; msg.textContent = '';
-  sec.scrollIntoView({ behavior: 'smooth' });
-  startCheckout();
-}
-
-async function startCheckout() {
-  const msg = document.getElementById('co-msg');
-  msg.style.color = 'var(--muted)'; msg.textContent = 'getting quote…';
+  if (!confirm(`Proceed to Stripe checkout to upgrade to ${label} for $${price}/mo?`)) return;
+  
   try {
     const r = await fetch('/api/subscribe', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ tier: CO.tier })
+      body: JSON.stringify({ tier })
     });
     const d = await r.json();
-    if (r.status === 402 && d.pay_to) {
-      CO.quote_id = d.quote_id; CO.address = d.pay_to.address; CO.confirm_url = d.confirm_url || '/api/confirm';
-      document.getElementById('q-amount').textContent = `${d.pay_to.amount} ${d.pay_to.asset}`;
-      document.getElementById('q-asset').textContent = `${d.pay_to.asset} on ${d.pay_to.chain}`;
-      document.getElementById('q-address').textContent = d.pay_to.address;
-      document.getElementById('q-quote').textContent = d.quote_id;
-      document.getElementById('q-instructions').textContent = d.instructions || '';
-      document.getElementById('co-quote').style.display = '';
-      msg.style.color = 'var(--muted)'; msg.textContent = 'Send the exact amount, then paste your transaction hash below.';
-    } else if (r.ok) {
-      msg.style.color = 'var(--low)'; msg.textContent = d.message || 'subscribed';
+    if (d.checkout_url) {
+      window.location.href = d.checkout_url;
     } else {
-      msg.style.color = 'var(--high)'; msg.textContent = d.error || 'could not start checkout';
+      alert(d.error || 'Could not start checkout');
     }
   } catch (e) {
-    msg.style.color = 'var(--high)'; msg.textContent = 'network error — try again';
+    alert('Network error, please try again.');
   }
 }
 
-async function copyAddr() {
-  try {
-    await navigator.clipboard.writeText(CO.address || '');
-    const b = document.getElementById('q-copy'); b.textContent = 'copied';
-    setTimeout(() => { b.textContent = 'copy'; }, 1500);
-  } catch (e) {}
-}
-
-async function confirmTx() {
-  const btn = document.getElementById('co-confirm-btn');
-  const tx = document.getElementById('co-tx').value.trim();
-  const msg = document.getElementById('co-msg');
-  if (!/^0x[0-9a-fA-F]{6,}$/.test(tx)) { msg.style.color = 'var(--high)'; msg.textContent = 'paste a valid 0x… transaction hash'; return; }
-  if (!CO.quote_id) { msg.style.color = 'var(--high)'; msg.textContent = 'get a payment quote first'; return; }
-  btn.disabled = true; btn.textContent = 'verifying…';
-  try {
-    const r = await fetch(CO.confirm_url, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ quote_id: CO.quote_id, tx_hash: tx })
-    });
-    const d = await r.json();
-    if (r.ok) {
+window.addEventListener('DOMContentLoaded', async () => {
+  const urlParams = new URLSearchParams(window.location.search);
+  const sessionId = urlParams.get('session_id');
+  if (sessionId) {
+    window.history.replaceState({}, document.title, "/");
+    document.getElementById('account-status').textContent = 'Verifying Stripe payment...';
+    try {
+      const r = await fetch('/api/confirm', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ session_id: sessionId })
+      });
+      const d = await r.json();
       if (d.api_key) {
         setKey(d.api_key);
-        const inp = document.getElementById('api-key');
-        if (inp) inp.value = d.api_key;
+        loadAccount();
         loadChanges();
-        msg.style.color = 'var(--low)';
-        msg.innerHTML = `✓ ${escapeHtml(CO.tier)} unlocked. Your API key (saved to this browser, shown once):<br>` +
-          `<code style="word-break:break-all;display:inline-block;margin-top:6px">${escapeHtml(d.api_key)}</code><br>` +
-          `Send it as <code>Authorization: Bearer &lt;key&gt;</code> or <code>x-api-key</code>. The real-time intel feed above is now unlocked.`;
+        alert("Payment successful! Your API Key: " + d.api_key + "\\n\\nStore this safely!");
+      } else if (d.already_active) {
+        alert("Payment was already confirmed! Your API Key: " + d.api_key);
       } else {
-        msg.style.color = 'var(--low)';
-        msg.textContent = `✓ ${CO.tier} active${d.already_active ? ' (already confirmed)' : ''}.`;
+        alert("Payment not confirmed: " + (d.error || 'Unknown error'));
+        loadAccount();
       }
+    } catch(e) {
+      alert("Error confirming payment.");
+      loadAccount();
     }
-    else { msg.style.color = 'var(--high)'; msg.textContent = d.error || 'payment not verified yet — on-chain confirmation can take a moment, try again shortly'; }
-  } catch (e) {
-    msg.style.color = 'var(--high)'; msg.textContent = 'network error — try again';
-  } finally {
-    btn.disabled = false; btn.textContent = "I've sent it — unlock";
+  } else {
+    loadAccount();
   }
-}
-
-(function initKey() {
-  const k = getKey();
-  const inp = document.getElementById('api-key');
-  if (k && inp) inp.value = k;
-})();
-loadPrograms();
-loadChanges();
+  loadPrograms();
+  loadChanges();
+});
 </script>
 
 </body>

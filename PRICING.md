@@ -27,17 +27,14 @@ this table and the gate can't drift.
 - The free response includes `hidden_by_delay` so a caller can see how many
   real-time events they're missing.
 
-## How to subscribe (USDC, no account)
+## How to subscribe (Stripe)
 
-1. `POST /api/subscribe` with `{"tier":"pro"}` (or `"team"`) → `402` with a USDC
-   payment quote: an address, exact amount, and a memo (`quote_id`).
-2. Send the exact amount on-chain.
-3. `POST /api/confirm` with `{"quote_id","tx_hash"}`. The receipt is verified
-   against the shared payrail rail, and the response returns your **`api_key`**
+1. `POST /api/subscribe` with `{"tier":"pro"}` (or `"team"`) → Returns a Stripe `checkout_url`.
+2. Complete the payment via Stripe Checkout. You will be redirected to the app with a `session_id`.
+3. `POST /api/confirm` with `{"session_id"}`. The session is verified against Stripe, and the response returns your **`api_key`**
    (`bsk_…`). It is shown once — store it.
 
-Payment runs over the shared fleet [payrail](https://payrail.ivixivi.workers.dev)
-Worker; BountyScope does not custody funds.
+BountyScope uses Stripe for all billing and does not process card data directly.
 
 ## Using your API key
 
@@ -61,5 +58,5 @@ An absent, unknown, or revoked key transparently falls back to the **free** tier
 
 - The free analyzer quota is keyed by API key when present, otherwise by client IP,
   and resets daily (UTC).
-- Lost your key? Re-`POST /api/confirm` with the same `quote_id`; an already-confirmed
-  quote returns the existing key instead of minting a new one.
+- Lost your key? Re-`POST /api/confirm` with your Stripe `session_id`; an already-confirmed
+  session returns the existing key instead of minting a new one.

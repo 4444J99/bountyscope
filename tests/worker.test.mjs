@@ -97,7 +97,6 @@ function makePayrail() {
 
 function makeEnv(overrides = {}) {
   const aiCalls = [];
-  const payrail = makePayrail();
 
   const env = {
     AI: {
@@ -114,11 +113,11 @@ function makeEnv(overrides = {}) {
     BS_PROGRAMS: new MemoryKV(),
     BS_REPORTS: new MemoryKV(),
     USER_AGENT: 'BountyScope test bot',
-    PAYRAIL: payrail.binding,
+    STRIPE_SECRET_KEY: 'test_sk_123',
     ...overrides,
   };
 
-  return { env, aiCalls, payrailCalls: payrail.calls };
+  return { env, aiCalls };
 }
 
 async function fetchWorker(env, path, init) {
@@ -292,56 +291,71 @@ test('paid analyzer calls are authenticated by API key and are not free-quota li
   assert.equal(whoami.body.changes_real_time, true);
 });
 
-test('subscription checkout confirms through payrail, mints an API key, and is idempotent', async () => {
-  const { env, payrailCalls } = makeEnv({ SHIP_HMAC_SECRET: 'secret' });
+test('subscription checkout redirects to Stripe, mints an API key on confirm, and is idempotent', async () => {
+  const { env } = makeEnv();
+  const originalFetch = globalThis.fetch;
+  const stripeCalls = [];
 
-  const subscribe = await fetchJson(env, '/api/subscribe', jsonRequest({ tier: 'team' }));
+  globalThis.fetch = async (input, init) => {
+    const url = typeof input === 'string' ? input : input.url;
+    stripeCalls.push({ url, method: init?.method, body: init?.body });
+    
+    if (url.includes('/checkout/sessions') && init?.method === 'POST') {
+      return Response.json({
+        id: 'cs_test_123',
+        url: 'https://checkout.stripe.com/pay/cs_test_123'
+      });
+    }
+    
+    if (url.includes('/checkout/sessions/cs_test_123') && init?.method !== 'POST') {
+      return Response.json({
+        id: 'cs_test_123',
+        payment_status: 'paid',
+        client_reference_id: 'team',
+        amount_total: 19900
+      });
+    }
 
-  assert.equal(subscribe.response.status, 402);
-  assert.equal(subscribe.body.status, 'payment_required');
-  assert.equal(subscribe.body.tier, 'team');
-  assert.equal(subscribe.body.quote_id, 'quote_123');
-  assert.equal(subscribe.body.pay_to.amount, '199');
-  assert.equal(payrailCalls[0].url.pathname, '/pay');
-  assert.equal(payrailCalls[0].url.searchParams.get('sku'), 'bountyscope:team');
-  assert.ok(env.BS_REPORTS.json('pending:quote_123'));
+    return new Response('not found', { status: 404 });
+  };
 
-  const missingFields = await fetchJson(env, '/api/confirm', jsonRequest({ quote_id: 'quote_123' }));
-  assert.equal(missingFields.response.status, 400);
-  assert.equal(missingFields.body.error, 'quote_id and tx_hash required');
+  try {
+    const subscribe = await fetchJson(env, '/api/subscribe', jsonRequest({ tier: 'team' }));
 
-  const confirm = await fetchJson(env, '/api/confirm', jsonRequest({
-    quote_id: 'quote_123',
-    tx_hash: '0xabc123',
-  }));
+    assert.equal(subscribe.response.status, 200);
+    assert.equal(subscribe.body.status, 'payment_required');
+    assert.equal(subscribe.body.tier, 'team');
+    assert.equal(subscribe.body.checkout_url, 'https://checkout.stripe.com/pay/cs_test_123');
 
-  assert.equal(confirm.response.status, 201);
-  assert.equal(confirm.body.ok, true);
-  assert.equal(confirm.body.tier, 'team');
-  assert.match(confirm.body.api_key, /^bsk_[0-9a-f]{48}$/);
-  assert.deepEqual(confirm.body.receipt, { id: 'receipt_123', accepted: true });
-  assert.equal(env.BS_REPORTS.store.has('pending:quote_123'), false);
+    const missingFields = await fetchJson(env, '/api/confirm', jsonRequest({}));
+    assert.equal(missingFields.response.status, 400);
+    assert.equal(missingFields.body.error, 'session_id required');
 
-  const receiptCall = payrailCalls.find(call => call.url.pathname === '/receipt');
-  assert.ok(receiptCall);
-  assert.equal(receiptCall.method, 'POST');
-  assert.ok(receiptCall.headers.get('x-payrail-signature'));
-  assert.match(receiptCall.body, /"sku":"bountyscope:team"/);
+    const confirm = await fetchJson(env, '/api/confirm', jsonRequest({
+      session_id: 'cs_test_123',
+    }));
 
-  const whoami = await fetchJson(env, '/api/whoami', {
-    headers: { authorization: `Bearer ${confirm.body.api_key}` },
-  });
-  assert.equal(whoami.body.tier, 'team');
-  assert.equal(whoami.body.authenticated, true);
-  assert.equal(whoami.body.key_present, true);
+    assert.equal(confirm.response.status, 201);
+    assert.equal(confirm.body.ok, true);
+    assert.equal(confirm.body.tier, 'team');
+    assert.match(confirm.body.api_key, /^bsk_[0-9a-f]{48}$/);
 
-  const repeat = await fetchJson(env, '/api/confirm', jsonRequest({
-    quote_id: 'quote_123',
-    tx_hash: '0xabc123',
-  }));
-  assert.equal(repeat.response.status, 200);
-  assert.equal(repeat.body.already_active, true);
-  assert.equal(repeat.body.api_key, confirm.body.api_key);
+    const whoami = await fetchJson(env, '/api/whoami', {
+      headers: { authorization: `Bearer ${confirm.body.api_key}` },
+    });
+    assert.equal(whoami.body.tier, 'team');
+    assert.equal(whoami.body.authenticated, true);
+    assert.equal(whoami.body.key_present, true);
+
+    const repeat = await fetchJson(env, '/api/confirm', jsonRequest({
+      session_id: 'cs_test_123',
+    }));
+    assert.equal(repeat.response.status, 200);
+    assert.equal(repeat.body.already_active, true);
+    assert.equal(repeat.body.api_key, confirm.body.api_key);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
 test('scheduled cron seeds programs, stores HEAD fingerprints, and logs later changes', async () => {
