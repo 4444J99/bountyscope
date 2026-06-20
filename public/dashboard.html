@@ -1,0 +1,359 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>BountyScope Dashboard</title>
+<meta name="description" content="BountyScope status and usage dashboard.">
+<style>
+:root {
+  --bg:#07080a;
+  --panel:#10131a;
+  --panel-2:#15191f;
+  --fg:#eef0f3;
+  --muted:#7a8898;
+  --border:#1f2733;
+  --accent:#a78bfa;
+  --green:#22c55e;
+  --yellow:#eab308;
+  --red:#ef4444;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{
+  min-height:100vh;
+  background:var(--bg);
+  color:var(--fg);
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;
+  line-height:1.5;
+  padding:24px;
+}
+.shell{max-width:1180px;margin:0 auto}
+.topbar{
+  display:flex;
+  align-items:flex-start;
+  justify-content:space-between;
+  gap:16px;
+  padding:8px 0 22px;
+  border-bottom:1px solid var(--border);
+}
+h1{font-size:26px;font-weight:700;letter-spacing:0}
+h2{font-size:15px;font-weight:700;letter-spacing:0;margin-bottom:12px}
+.sub{color:var(--muted);font-size:13px;margin-top:4px}
+.links{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end}
+a{color:var(--fg);text-decoration:none}
+.navlink{
+  border:1px solid var(--border);
+  background:var(--panel);
+  color:var(--fg);
+  border-radius:6px;
+  padding:8px 10px;
+  font-size:13px;
+}
+.navlink:hover{border-color:var(--accent)}
+.grid{
+  display:grid;
+  grid-template-columns:repeat(6,minmax(0,1fr));
+  gap:12px;
+  margin:22px 0;
+}
+.metric{
+  min-height:116px;
+  background:var(--panel);
+  border:1px solid var(--border);
+  border-radius:8px;
+  padding:14px;
+  display:flex;
+  flex-direction:column;
+  justify-content:space-between;
+}
+.metric strong{font-size:28px;line-height:1.05;font-weight:750;letter-spacing:0}
+.metric span{color:var(--muted);font-size:12px;text-transform:uppercase;font-weight:700;letter-spacing:.05em}
+.metric small{color:var(--muted);font-size:12px;display:block;margin-top:8px}
+.metric.good{border-color:rgba(34,197,94,.45)}
+.metric.warn{border-color:rgba(234,179,8,.45)}
+.layout{
+  display:grid;
+  grid-template-columns:minmax(0,1.1fr) minmax(0,.9fr);
+  gap:12px;
+}
+.panel{
+  background:var(--panel);
+  border:1px solid var(--border);
+  border-radius:8px;
+  padding:16px;
+  min-width:0;
+}
+.panel + .panel{margin-top:12px}
+.stack{display:grid;gap:12px}
+.row{
+  display:flex;
+  justify-content:space-between;
+  gap:14px;
+  padding:10px 0;
+  border-bottom:1px solid var(--border);
+  font-size:14px;
+}
+.row:last-child{border-bottom:0}
+.row span{color:var(--muted)}
+.row strong{text-align:right;font-weight:650}
+.bars{display:grid;gap:10px}
+.bar-label{
+  display:flex;
+  justify-content:space-between;
+  gap:12px;
+  color:var(--muted);
+  font-size:13px;
+  margin-bottom:5px;
+}
+.bar-track{height:8px;background:#0a0c10;border-radius:999px;overflow:hidden}
+.bar-fill{height:100%;background:var(--accent);border-radius:999px;min-width:2px}
+.table-wrap{overflow-x:auto;border:1px solid var(--border);border-radius:8px}
+table{width:100%;border-collapse:collapse;font-size:13px;min-width:520px}
+th,td{padding:10px 12px;text-align:left;border-bottom:1px solid var(--border)}
+th{background:var(--panel-2);color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.05em}
+tr:last-child td{border-bottom:0}
+.pill{
+  display:inline-block;
+  border:1px solid var(--border);
+  background:#0a0c10;
+  border-radius:999px;
+  padding:2px 8px;
+  color:var(--muted);
+  font-size:12px;
+}
+.ok{color:var(--green)}
+.warn-text{color:var(--yellow)}
+.danger{color:var(--red)}
+.empty{
+  color:var(--muted);
+  border:1px dashed var(--border);
+  border-radius:8px;
+  padding:18px;
+  font-size:14px;
+}
+@media (max-width:980px){
+  .grid{grid-template-columns:repeat(3,minmax(0,1fr))}
+  .layout{grid-template-columns:1fr}
+}
+@media (max-width:620px){
+  body{padding:16px}
+  .topbar{display:block}
+  .links{justify-content:flex-start;margin-top:14px}
+  .grid{grid-template-columns:1fr 1fr}
+  .metric strong{font-size:24px}
+}
+</style>
+</head>
+<body>
+<div class="shell">
+  <header class="topbar">
+    <div>
+      <h1>BountyScope Dashboard</h1>
+      <p class="sub" id="generated">Loading status...</p>
+    </div>
+    <nav class="links">
+      <a class="navlink" href="/">Product</a>
+      <a class="navlink" href="/api/status">Status JSON</a>
+      <a class="navlink" href="/api/changes">Changes API</a>
+    </nav>
+  </header>
+
+  <main>
+    <section class="grid" id="metrics"></section>
+
+    <div class="layout">
+      <div class="stack">
+        <section class="panel">
+          <h2>Program Coverage</h2>
+          <div class="table-wrap">
+            <table>
+              <tbody id="coverage"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="panel">
+          <h2>Sources</h2>
+          <div class="bars" id="sources"></div>
+        </section>
+
+        <section class="panel">
+          <h2>Ecosystems</h2>
+          <div class="bars" id="ecosystems"></div>
+        </section>
+      </div>
+
+      <div class="stack">
+        <section class="panel">
+          <h2>Change Feed</h2>
+          <div id="changes"></div>
+        </section>
+
+        <section class="panel">
+          <h2>Usage</h2>
+          <div id="usage"></div>
+        </section>
+
+        <section class="panel">
+          <h2>Access</h2>
+          <div id="access"></div>
+        </section>
+      </div>
+    </div>
+  </main>
+</div>
+
+<script>
+const money = new Intl.NumberFormat('en-US', {
+  style: 'currency',
+  currency: 'USD',
+  maximumFractionDigits: 0
+});
+const number = new Intl.NumberFormat('en-US');
+
+function esc(value) {
+  return String(value ?? '').replace(/[&<>"']/g, c => ({
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#39;'
+  }[c]));
+}
+
+function fmtNumber(value) {
+  return number.format(Number(value || 0));
+}
+
+function fmtMoney(value) {
+  return money.format(Number(value || 0));
+}
+
+function fmtDate(value) {
+  if (!value) return 'Never';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return 'Unknown';
+  return date.toLocaleString([], {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit'
+  });
+}
+
+function metric(label, value, note, tone) {
+  return `<article class="metric ${tone || ''}">
+    <span>${esc(label)}</span>
+    <div>
+      <strong>${esc(value)}</strong>
+      <small>${esc(note || '')}</small>
+    </div>
+  </article>`;
+}
+
+function rows(items) {
+  return items.map(([label, value]) => `
+    <div class="row">
+      <span>${esc(label)}</span>
+      <strong>${value}</strong>
+    </div>
+  `).join('');
+}
+
+function tableRows(items) {
+  return items.map(([label, value]) => `
+    <tr>
+      <th>${esc(label)}</th>
+      <td>${value}</td>
+    </tr>
+  `).join('');
+}
+
+function bars(counts) {
+  const entries = Object.entries(counts || {}).sort((a, b) => b[1] - a[1]);
+  if (!entries.length) return '<div class="empty">No data</div>';
+  const max = Math.max(...entries.map(([, value]) => value), 1);
+  return entries.map(([label, value]) => `
+    <div>
+      <div class="bar-label">
+        <span>${esc(label)}</span>
+        <strong>${fmtNumber(value)}</strong>
+      </div>
+      <div class="bar-track">
+        <div class="bar-fill" style="width:${Math.max(3, (value / max) * 100)}%"></div>
+      </div>
+    </div>
+  `).join('');
+}
+
+function statusClass(count) {
+  if (count > 0) return 'warn-text';
+  return 'ok';
+}
+
+function render(data) {
+  document.getElementById('generated').textContent =
+    `Generated ${fmtDate(data.generated_at)}. Last cron ${fmtDate(data.last_cron_at)}.`;
+
+  const topProgram = data.programs?.top_program;
+  document.getElementById('metrics').innerHTML = [
+    metric('Programs', fmtNumber(data.program_count), `${fmtNumber(data.programs?.live)} live`, 'good'),
+    metric('Bounty Coverage', fmtMoney(data.programs?.total_max_bounty_usd), topProgram ? `Top: ${topProgram.name}` : ''),
+    metric('Tracked Repos', fmtNumber(data.programs?.in_scope_repo_count), 'In-scope repositories'),
+    metric('Logged Changes', fmtNumber(data.changes?.total_logged), `${fmtNumber(data.changes?.last_24h)} in 24h`, data.changes?.last_24h ? 'warn' : ''),
+    metric('Analyzer Reports', fmtNumber(data.usage?.analyzer_reports_30d), 'Rolling 30 day cache'),
+    metric('Active Subs', fmtNumber(data.usage?.active_subscriptions), `${fmtNumber(data.usage?.api_keys_issued)} API keys`)
+  ].join('');
+
+  document.getElementById('coverage').innerHTML = tableRows([
+    ['Live', `<span class="pill ok">${fmtNumber(data.programs?.live)}</span>`],
+    ['Paused', `<span class="pill">${fmtNumber(data.programs?.paused)}</span>`],
+    ['Closed', `<span class="pill">${fmtNumber(data.programs?.closed)}</span>`],
+    ['Top bounty', topProgram ? `<a href="${esc(topProgram.url)}">${esc(topProgram.name)}</a> ${esc(fmtMoney(topProgram.max_bounty_usd))}` : 'None'],
+    ['Last program change', esc(fmtDate(data.changes?.last_change_at))]
+  ]);
+
+  document.getElementById('sources').innerHTML = bars(data.programs?.sources);
+  document.getElementById('ecosystems').innerHTML = bars(data.programs?.ecosystems);
+
+  document.getElementById('changes').innerHTML = rows([
+    ['Events retained', esc(fmtNumber(data.changes?.total_logged))],
+    ['Programs changed', esc(fmtNumber(data.changes?.programs_changed))],
+    ['Last 24 hours', `<span class="${statusClass(data.changes?.last_24h)}">${esc(fmtNumber(data.changes?.last_24h))}</span>`],
+    ['Last 7 days', `<span class="${statusClass(data.changes?.last_7d)}">${esc(fmtNumber(data.changes?.last_7d))}</span>`],
+    ['Retention limit', esc(fmtNumber(data.changes?.retention_limit))]
+  ]);
+
+  document.getElementById('usage').innerHTML = rows([
+    ['Analyzer reports', esc(fmtNumber(data.usage?.analyzer_reports_30d))],
+    ['Free analyzer calls today', esc(fmtNumber(data.usage?.free_analyzer_calls_today))],
+    ['Pending checkouts', `<span class="${statusClass(data.usage?.pending_checkouts)}">${esc(fmtNumber(data.usage?.pending_checkouts))}</span>`],
+    ['API keys issued', esc(fmtNumber(data.usage?.api_keys_issued))]
+  ]);
+
+  const subTiers = data.usage?.active_subscription_tiers || {};
+  const keyTiers = data.usage?.api_key_tiers || {};
+  document.getElementById('access').innerHTML = rows([
+    ['Pro subscriptions', esc(fmtNumber(subTiers.pro))],
+    ['Team subscriptions', esc(fmtNumber(subTiers.team))],
+    ['Pro keys', esc(fmtNumber(keyTiers.pro))],
+    ['Team keys', esc(fmtNumber(keyTiers.team))]
+  ]);
+}
+
+async function load() {
+  try {
+    const response = await fetch('/api/status', { headers: { accept: 'application/json' } });
+    if (!response.ok) throw new Error(`status ${response.status}`);
+    render(await response.json());
+  } catch (error) {
+    document.getElementById('generated').textContent = 'Status unavailable';
+    document.getElementById('metrics').innerHTML = '<div class="empty">Could not load /api/status</div>';
+  }
+}
+
+load();
+</script>
+</body>
+</html>

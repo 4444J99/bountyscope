@@ -29,6 +29,23 @@ class MemoryKV {
     this.deletes.push(key);
   }
 
+  async list(options = {}) {
+    const prefix = options.prefix ?? '';
+    const limit = options.limit ?? 1000;
+    const start = options.cursor ? Number(options.cursor) : 0;
+    const matches = [...this.store.keys()]
+      .filter(key => key.startsWith(prefix))
+      .sort();
+    const page = matches.slice(start, start + limit);
+    const next = start + page.length;
+
+    return {
+      keys: page.map(name => ({ name })),
+      list_complete: next >= matches.length,
+      cursor: next >= matches.length ? undefined : String(next),
+    };
+  }
+
   json(key) {
     const value = this.store.get(key);
     return value == null ? null : JSON.parse(value);
@@ -98,6 +115,7 @@ function makePayrail() {
 function makeEnv(overrides = {}) {
   const aiCalls = [];
   const payrail = makePayrail();
+  const assetRequests = [];
 
   const env = {
     AI: {
@@ -107,7 +125,8 @@ function makeEnv(overrides = {}) {
       },
     },
     ASSETS: {
-      async fetch() {
+      async fetch(req) {
+        assetRequests.push(req);
         return new Response('asset response', { status: 200, headers: { 'x-asset': 'hit' } });
       },
     },
@@ -118,7 +137,7 @@ function makeEnv(overrides = {}) {
     ...overrides,
   };
 
-  return { env, aiCalls, payrailCalls: payrail.calls };
+  return { env, aiCalls, assetRequests, payrailCalls: payrail.calls };
 }
 
 async function fetchWorker(env, path, init) {
@@ -218,6 +237,71 @@ test('GET /api/changes applies the free delay/cap and unlocks real-time repo det
   assert.equal(paid.body.changes[0].program_id, 'program-0');
   assert.deepEqual(paid.body.changes[0].in_scope_repos, ['https://github.com/example/program-0']);
   assert.equal(paid.body.hidden_by_delay, undefined);
+});
+
+test('GET /api/status returns dashboard coverage and usage metrics', async () => {
+  const { env } = makeEnv();
+  await env.BS_PROGRAMS.put(PROGRAMS_KEY, JSON.stringify([
+    {
+      id: 'program-a',
+      source: 'immunefi',
+      name: 'Program A',
+      url: 'https://example.test/a',
+      max_bounty_usd: 100_000,
+      ecosystem: 'ethereum',
+      in_scope_repos: ['https://github.com/example/a'],
+      status: 'live',
+      last_seen_at: '2026-06-20T10:00:00.000Z',
+      last_changed_at: '2026-06-20T11:00:00.000Z',
+    },
+    {
+      id: 'program-b',
+      source: 'sherlock',
+      name: 'Program B',
+      url: 'https://example.test/b',
+      max_bounty_usd: 250_000,
+      ecosystem: 'solana',
+      in_scope_repos: ['https://github.com/example/b'],
+      status: 'paused',
+      last_seen_at: '2026-06-20T10:30:00.000Z',
+    },
+  ]));
+  await env.BS_PROGRAMS.put(CHANGES_KEY, JSON.stringify([changeEvent(1, 2), changeEvent(2, 200)]));
+  await env.BS_REPORTS.put('report:a', '{}');
+  await env.BS_REPORTS.put('report:b', '{}');
+  await env.BS_REPORTS.put('sub:quote-pro', JSON.stringify({ tier: 'pro' }));
+  await env.BS_REPORTS.put('sub:quote-team', JSON.stringify({ tier: 'team' }));
+  await env.BS_REPORTS.put('key:pro-key', JSON.stringify({ tier: 'pro' }));
+  await env.BS_REPORTS.put('pending:quote-pending', JSON.stringify({ tier: 'pro' }));
+  const today = new Date().toISOString().slice(0, 10);
+  await env.BS_REPORTS.put(`quota:${today}:ip:203.0.113.1`, '3');
+  await env.BS_REPORTS.put(`quota:${today}:ip:203.0.113.2`, '2');
+
+  const { response, body } = await fetchJson(env, '/api/status');
+
+  assert.equal(response.status, 200);
+  assert.equal(body.name, 'BountyScope');
+  assert.equal(body.program_count, 2);
+  assert.equal(body.recent_changes, 1);
+  assert.equal(body.logged_changes, 2);
+  assert.equal(body.last_cron_at, '2026-06-20T10:30:00.000Z');
+  assert.equal(body.programs.live, 1);
+  assert.equal(body.programs.paused, 1);
+  assert.equal(body.programs.total_max_bounty_usd, 350_000);
+  assert.equal(body.programs.top_program.id, 'program-b');
+  assert.deepEqual(body.programs.sources, { immunefi: 1, sherlock: 1 });
+  assert.deepEqual(body.programs.ecosystems, { ethereum: 1, solana: 1 });
+  assert.equal(body.programs.in_scope_repo_count, 2);
+  assert.equal(body.changes.total_logged, 2);
+  assert.equal(body.changes.last_24h, 1);
+  assert.equal(body.changes.last_7d, 1);
+  assert.equal(body.usage.analyzer_reports_30d, 2);
+  assert.equal(body.usage.free_analyzer_calls_today, 5);
+  assert.equal(body.usage.active_subscriptions, 2);
+  assert.deepEqual(body.usage.active_subscription_tiers, { free: 0, pro: 1, team: 1 });
+  assert.equal(body.usage.api_keys_issued, 1);
+  assert.deepEqual(body.usage.api_key_tiers, { free: 0, pro: 1, team: 0 });
+  assert.equal(body.usage.pending_checkouts, 1);
 });
 
 test('POST /api/analyze validates input, persists reports, and enforces the free daily quota', async () => {
@@ -394,4 +478,14 @@ test('unknown routes fall through to the static asset binding', async () => {
   assert.equal(response.status, 200);
   assert.equal(response.headers.get('x-asset'), 'hit');
   assert.equal(await response.text(), 'asset response');
+});
+
+test('GET /dashboard serves the static dashboard asset', async () => {
+  const { env, assetRequests } = makeEnv();
+
+  const response = await fetchWorker(env, '/dashboard');
+
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get('x-asset'), 'hit');
+  assert.equal(new URL(assetRequests[0].url).pathname, '/dashboard.html');
 });

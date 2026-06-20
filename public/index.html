@@ -147,6 +147,7 @@ contract Vault {
   <p><code>POST /api/subscribe</code> — body: <code>{tier}</code> → USDC payment quote (402)</p>
   <p><code>POST /api/confirm</code> — body: <code>{quote_id, tx_hash}</code> → returns your <code>api_key</code></p>
   <p><code>GET /api/status</code> — system health</p>
+  <p><code>GET /dashboard</code> — status and usage metrics</p>
 </section>
 
 <section>
@@ -160,7 +161,7 @@ contract Vault {
 </section>
 
 <footer>
-  <p>BountyScope • <a href="/api/programs">API</a> • Public bounty info from Immunefi / Code4rena / Sherlock — links are to source</p>
+  <p>BountyScope • <a href="/api/programs">API</a> • <a href="/dashboard">Dashboard</a> • Public bounty info from Immunefi / Code4rena / Sherlock — links are to source</p>
   <p style="margin-top:10px">Sister products:</p>
   <div style="display:flex;flex-wrap:wrap;gap:6px;justify-content:center;margin-top:6px">
     <a style="background:var(--card);border:1px solid var(--border);padding:4px 10px;border-radius:14px;font-size:12px;text-decoration:none" href="https://promptscope.ivixivi.workers.dev">PromptScope</a>

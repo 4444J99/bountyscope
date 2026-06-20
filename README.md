@@ -21,6 +21,7 @@ GET  /api/whoami            — Tier + remaining quota for the presented API key
 POST /api/subscribe         — { tier } → USDC payment quote (402)
 POST /api/confirm           — { quote_id, tx_hash } → mints your API key
 GET  /api/status            — System health
+GET  /dashboard             — Minimal status/usage dashboard
 ```
 
 Gated endpoints read an API key from `Authorization: Bearer bsk_…` or `x-api-key`.
